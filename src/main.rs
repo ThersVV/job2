@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     http::{header::TRANSFER_ENCODING, HeaderMap, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, put},
     Error, Router,
 };
 use tokio::time::{sleep, Duration};
@@ -29,6 +29,17 @@ async fn hello_world<'a>() -> &'a str {
     return "hi!";
 }
 
+async fn placeholder_delete(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
+    let mut stream_map = state.connections.lock().await;
+    let valid_id = stream_map.contains_key(&id);
+    if valid_id {
+        stream_map.remove(&id);
+        return Ok((StatusCode::NO_CONTENT, "File succesfully deleted!"));
+    } else {
+        return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
+    }
+}
+
 async fn manage_readers(stream: &StreamCon) {
     let readers = &mut stream.readers.lock().unwrap();
     for reader in readers.iter() {
@@ -37,7 +48,7 @@ async fn manage_readers(stream: &StreamCon) {
     readers.clear();
 }
 
-async fn placeholder_post(
+async fn placeholder_put(
     State(state): AppState,
     Path(id): Path<usize>,
     headers: HeaderMap,
@@ -45,11 +56,8 @@ async fn placeholder_post(
 ) -> impl IntoResponse {
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
-    if !(true/* chunked_encoding */) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Transfer encoding is not chunked!".to_owned(),
-        ));
+    if !(true) {
+        return Err((StatusCode::BAD_REQUEST, "Unknown error".to_owned()));
     }
 
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_CAPACITY);
@@ -94,7 +102,7 @@ async fn placeholder_post(
 
 async fn placeholder_get(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
     let stream_map = state.connections.lock().await;
-    println!("{:?}, {:p}", stream_map.len(), state.connections);
+
     if let Some(stream) = stream_map.get(&id) {
         let cache_stream = CacheStream {
             cache: stream.writer.clone(),
@@ -115,7 +123,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(hello_world))
-        .route("/upload/:id", post(placeholder_post))
+        .route("/upload/:id", put(placeholder_put))
+        .route("/delete/:id", delete(placeholder_delete))
         .route("/download/:id", get(placeholder_get))
         .with_state(state);
     // run our app with hyper, listening globally on port 3000
