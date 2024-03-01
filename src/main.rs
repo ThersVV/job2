@@ -9,9 +9,8 @@ use axum::{
 };
 
 use core::pin::Pin;
-use futures_core::{stream, task::Waker};
 use futures_core::{
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
     Stream,
 };
 use std::collections::HashMap;
@@ -136,13 +135,13 @@ async fn main() {
 
 #[derive(Default, Clone, Debug, FromRef)]
 struct MyState {
-    connections: Arc<tokio::sync::Mutex<HashMap<usize, StreamCon>>>,
+    connections: Arc<Mutex<HashMap<usize, StreamCon>>>,
 }
 
 #[derive(Clone, Default, Debug)]
 struct StreamCon {
     readers: Arc<std::sync::Mutex<Vec<Waker>>>,
-    writer: Arc<tokio::sync::RwLock<Writer>>,
+    writer: Arc<RwLock<Writer>>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -152,7 +151,7 @@ struct Writer {
 }
 
 struct CacheStream {
-    cache: Arc<tokio::sync::RwLock<Writer>>,
+    cache: Arc<RwLock<Writer>>,
     wakers: Arc<std::sync::Mutex<Vec<Waker>>>,
     index: usize,
 }
