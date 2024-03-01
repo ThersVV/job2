@@ -19,6 +19,7 @@ use tokio::sync::{Mutex, RwLock};
 
 type AppState = State<MyState>;
 
+// BYTES_PER_CHUNK must always be smaller than WRITE_BUFFER_CAPACITY!
 const BYTES_PER_CHUNK: usize = 8;
 const WRITE_BUFFER_CAPACITY: usize = 100; //in bytes
 
@@ -36,6 +37,17 @@ async fn delete_stream(State(state): AppState, Path(id): Path<usize>) -> impl In
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
 }
+async fn id_is_completed(state: &MyState, id: usize) -> bool {
+    let stream_map = state.connections.lock().await;
+    match stream_map.get(&id) {
+        None => return false,
+        Some(stream) => {
+            let writer = stream.writer.write().await;
+            return writer.ended;
+        }
+    }
+}
+
 async fn id_exists(state: &MyState, id: usize) -> bool {
     let stream_map = state.connections.lock().await;
     return stream_map.contains_key(&id);
@@ -55,17 +67,18 @@ async fn accept_stream(
     headers: HeaderMap,
     payload: Bytes,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    if id_exists(&state, id).await {
+    if id_is_completed(&state, id).await {
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&id);
     }
+    let created = !id_exists(&state, id).await;
 
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_CAPACITY);
     let iters = payload.len() / BYTES_PER_CHUNK;
 
-    for i in 0..iters + 1 {
+    for i in 0..(iters + 1) {
         let (payload_start, payload_end) = (
             i * BYTES_PER_CHUNK,
             std::cmp::min((i + 1) * BYTES_PER_CHUNK, iters),
@@ -95,7 +108,13 @@ async fn accept_stream(
             }
         }
     }
-    return Ok((StatusCode::ACCEPTED, "Chunk finished!".to_owned()));
+    if created {
+        return Ok((StatusCode::CREATED, "Resource has been created!".to_owned()));
+    } else if chunked_encoding {
+        return Ok((StatusCode::NO_CONTENT, "Chunk finished!".to_owned()));
+    } else {
+        return Ok((StatusCode::NO_CONTENT, "Transfer finished!".to_owned()));
+    }
 }
 
 async fn return_stream(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
@@ -126,7 +145,6 @@ async fn main() {
         .route("/delete/:id", delete(delete_stream))
         .route("/download/:id", get(return_stream))
         .with_state(state);
-    // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .unwrap();
