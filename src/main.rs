@@ -1,24 +1,22 @@
-use axum::extract::{FromRef, Path};
-use axum::Json;
 use axum::{
     body::{Body, Bytes},
     debug_handler,
-    extract::State,
+    extract::{FromRef, Path, State},
     http::{header::TRANSFER_ENCODING, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, put},
     Error, Router,
 };
-use tokio::time::{sleep, Duration};
 
 use core::pin::Pin;
-use futures_core::task::Waker;
+use futures_core::{stream, task::Waker};
 use futures_core::{
     task::{Context, Poll},
     Stream,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 type AppState = State<MyState>;
 
@@ -29,7 +27,7 @@ async fn hello_world<'a>() -> &'a str {
     return "hi!";
 }
 
-async fn placeholder_delete(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
+async fn delete_stream(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
     let mut stream_map = state.connections.lock().await;
     let valid_id = stream_map.contains_key(&id);
     if valid_id {
@@ -38,6 +36,10 @@ async fn placeholder_delete(State(state): AppState, Path(id): Path<usize>) -> im
     } else {
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
+}
+async fn id_exists(state: &MyState, id: usize) -> bool {
+    let stream_map = state.connections.lock().await;
+    return stream_map.contains_key(&id);
 }
 
 async fn manage_readers(stream: &StreamCon) {
@@ -48,24 +50,23 @@ async fn manage_readers(stream: &StreamCon) {
     readers.clear();
 }
 
-async fn placeholder_put(
+async fn accept_stream(
     State(state): AppState,
     Path(id): Path<usize>,
     headers: HeaderMap,
     payload: Bytes,
-) -> impl IntoResponse {
-    let chunked_encoding =
-        headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
-    if !(true) {
-        return Err((StatusCode::BAD_REQUEST, "Unknown error".to_owned()));
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    if id_exists(&state, id).await {
+        let mut stream_map = state.connections.lock().await;
+        stream_map.remove(&id);
     }
 
+    let chunked_encoding =
+        headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_CAPACITY);
+    let iters = payload.len() / BYTES_PER_CHUNK;
 
-    let mut i = 0;
-    let iters = payload.len();
-
-    while i * BYTES_PER_CHUNK < iters {
+    for i in 0..iters + 1 {
         let (payload_start, payload_end) = (
             i * BYTES_PER_CHUNK,
             std::cmp::min((i + 1) * BYTES_PER_CHUNK, iters),
@@ -94,13 +95,11 @@ async fn placeholder_put(
                 manage_readers(stream).await;
             }
         }
-
-        i += 1;
     }
     return Ok((StatusCode::ACCEPTED, "Chunk finished!".to_owned()));
 }
 
-async fn placeholder_get(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
+async fn return_stream(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
     let stream_map = state.connections.lock().await;
 
     if let Some(stream) = stream_map.get(&id) {
@@ -119,13 +118,14 @@ async fn placeholder_get(State(state): AppState, Path(id): Path<usize>) -> impl 
 
 #[tokio::main]
 async fn main() {
+    assert!(BYTES_PER_CHUNK < WRITE_BUFFER_CAPACITY);
     let state = MyState::default();
 
     let app = Router::new()
         .route("/", get(hello_world))
-        .route("/upload/:id", put(placeholder_put))
-        .route("/delete/:id", delete(placeholder_delete))
-        .route("/download/:id", get(placeholder_get))
+        .route("/upload/:id", put(accept_stream))
+        .route("/delete/:id", delete(delete_stream))
+        .route("/download/:id", get(return_stream))
         .with_state(state);
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
@@ -141,7 +141,7 @@ struct MyState {
 
 #[derive(Clone, Default, Debug)]
 struct StreamCon {
-    readers: Arc<Mutex<Vec<Waker>>>,
+    readers: Arc<std::sync::Mutex<Vec<Waker>>>,
     writer: Arc<tokio::sync::RwLock<Writer>>,
 }
 
@@ -153,7 +153,7 @@ struct Writer {
 
 struct CacheStream {
     cache: Arc<tokio::sync::RwLock<Writer>>,
-    wakers: Arc<Mutex<Vec<Waker>>>,
+    wakers: Arc<std::sync::Mutex<Vec<Waker>>>,
     index: usize,
 }
 
