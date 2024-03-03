@@ -2,6 +2,7 @@ use axum::{
     body::{Body, Bytes},
     debug_handler,
     extract::{FromRef, Path, State},
+    handler::Handler,
     http::{header::TRANSFER_ENCODING, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{delete, get, put},
@@ -27,19 +28,19 @@ async fn hello_world<'a>() -> &'a str {
     return "hi!";
 }
 
-async fn delete_stream(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
+async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let mut stream_map = state.connections.lock().await;
-    let valid_id = stream_map.contains_key(&id);
+    let valid_id = stream_map.contains_key(&path);
     if valid_id {
-        stream_map.remove(&id);
+        stream_map.remove(&path);
         return Ok((StatusCode::NO_CONTENT, "File succesfully deleted!"));
     } else {
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
 }
-async fn id_is_completed(state: &MyState, id: usize) -> bool {
+async fn id_is_completed(state: &MyState, path: &str) -> bool {
     let stream_map = state.connections.lock().await;
-    match stream_map.get(&id) {
+    match stream_map.get(path) {
         None => return false,
         Some(stream) => {
             let writer = stream.writer.write().await;
@@ -48,9 +49,9 @@ async fn id_is_completed(state: &MyState, id: usize) -> bool {
     }
 }
 
-async fn id_exists(state: &MyState, id: usize) -> bool {
+async fn id_exists(state: &MyState, path: &str) -> bool {
     let stream_map = state.connections.lock().await;
-    return stream_map.contains_key(&id);
+    return stream_map.contains_key(path);
 }
 
 async fn manage_readers(stream: &StreamCon) {
@@ -63,15 +64,15 @@ async fn manage_readers(stream: &StreamCon) {
 
 async fn accept_stream(
     State(state): AppState,
-    Path(id): Path<usize>,
+    Path(path): Path<String>,
     headers: HeaderMap,
     payload: Bytes,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    if id_is_completed(&state, id).await {
+    if id_is_completed(&state, &path).await {
         let mut stream_map = state.connections.lock().await;
-        stream_map.remove(&id);
+        stream_map.remove(&path);
     }
-    let created = !id_exists(&state, id).await;
+    let created = !id_exists(&state, &path).await;
 
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
@@ -91,7 +92,7 @@ async fn accept_stream(
         if buffer.len() > WRITE_BUFFER_CAPACITY || end_of_request {
             {
                 let mut stream_map = state.connections.lock().await;
-                let stream = stream_map.entry(id).or_default();
+                let stream = stream_map.entry(path.clone()).or_default();
 
                 let writer = &mut stream.writer.write().await;
                 writer.data.append(&mut buffer);
@@ -117,10 +118,10 @@ async fn accept_stream(
     }
 }
 
-async fn return_stream(State(state): AppState, Path(id): Path<usize>) -> impl IntoResponse {
+async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let stream_map = state.connections.lock().await;
 
-    if let Some(stream) = stream_map.get(&id) {
+    if let Some(stream) = stream_map.get(&path) {
         let cache_stream = CacheStream {
             cache: stream.writer.clone(),
             wakers: stream.readers.clone(),
@@ -134,6 +135,10 @@ async fn return_stream(State(state): AppState, Path(id): Path<usize>) -> impl In
     }
 }
 
+async fn list_files(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
+    ...
+}
+
 #[tokio::main]
 async fn main() {
     assert!(BYTES_PER_CHUNK < WRITE_BUFFER_CAPACITY);
@@ -141,9 +146,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(hello_world))
-        .route("/upload/:id", put(accept_stream))
-        .route("/delete/:id", delete(delete_stream))
-        .route("/download/:id", get(return_stream))
+        .route("/*path", put(accept_stream))
+        .route("/*path", delete(delete_stream))
+        .route("/*path", get(return_stream))
+        .route_service("/list", list_files.with_state(state.clone()))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
@@ -153,7 +159,7 @@ async fn main() {
 
 #[derive(Default, Clone, Debug, FromRef)]
 struct MyState {
-    connections: Arc<Mutex<HashMap<usize, StreamCon>>>,
+    connections: Arc<Mutex<HashMap<String, StreamCon>>>,
 }
 
 #[derive(Clone, Default, Debug)]
