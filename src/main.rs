@@ -3,18 +3,17 @@ use axum::{
     debug_handler,
     extract::{FromRef, Path, State},
     handler::Handler,
-    http::{header::TRANSFER_ENCODING, HeaderMap, StatusCode},
+    http::{header::TRANSFER_ENCODING, HeaderMap, Method, StatusCode},
     response::IntoResponse,
     routing::{delete, get, put},
     Error, Router,
 };
-
 use core::pin::Pin;
 use futures_core::{
     task::{Context, Poll, Waker},
     Stream,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
@@ -38,6 +37,7 @@ async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
 }
+
 async fn id_is_completed(state: &MyState, path: &str) -> bool {
     let stream_map = state.connections.lock().await;
     match stream_map.get(path) {
@@ -62,6 +62,35 @@ async fn manage_readers(stream: &StreamCon) {
     readers.clear();
 }
 
+async fn add_path_into_db(state: &MyState, path: &str) {
+    let mut path_database = state.path_database.lock().await;
+    let mut key_buffer = "".to_string();
+    let exploded_path = path.split('/');
+    let mut key_iterator = exploded_path.clone().enumerate().peekable();
+
+    while let Some((i, key_word)) = key_iterator.next() {
+        key_buffer = key_buffer + key_word;
+        if key_iterator.peek().is_some() {
+            key_buffer = key_buffer + "/";
+            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
+
+            let mut value_buffer = "".to_string();
+            let mut value_iterator = exploded_path.clone().skip(i + 1).peekable();
+            while let Some(value_word) = value_iterator.next() {
+                value_buffer = value_buffer + value_word;
+                if value_iterator.peek().is_some() {
+                    value_buffer = value_buffer + "/";
+                }
+            }
+            key_entry.insert(value_buffer.to_string());
+        } else {
+            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
+            key_entry.insert("".to_string());
+        }
+    }
+    println!("{:?}", path_database);
+}
+
 async fn accept_stream(
     State(state): AppState,
     Path(path): Path<String>,
@@ -73,7 +102,6 @@ async fn accept_stream(
         stream_map.remove(&path);
     }
     let created = !id_exists(&state, &path).await;
-
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
     let mut buffer = Vec::with_capacity(WRITE_BUFFER_CAPACITY);
@@ -82,7 +110,7 @@ async fn accept_stream(
     for i in 0..(iters + 1) {
         let (payload_start, payload_end) = (
             i * BYTES_PER_CHUNK,
-            std::cmp::min((i + 1) * BYTES_PER_CHUNK, iters),
+            std::cmp::min((i + 1) * BYTES_PER_CHUNK, payload.len()),
         );
 
         //measure time, maybe Bytes is smart enough to not copy to writer and just reference it (should be)
@@ -110,6 +138,7 @@ async fn accept_stream(
         }
     }
     if created {
+        add_path_into_db(&state, &path).await;
         return Ok((StatusCode::CREATED, "Resource has been created!".to_owned()));
     } else if chunked_encoding {
         return Ok((StatusCode::NO_CONTENT, "Chunk finished!".to_owned()));
@@ -135,8 +164,24 @@ async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl
     }
 }
 
-async fn list_files(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
-    ...
+async fn list_files(
+    method: Method,
+    headers: HeaderMap,
+    State(state): AppState,
+    body: String,
+) -> impl IntoResponse {
+    /*
+    TODO:
+    Check if this alg is ok:
+    just strip the star away from start and hash it
+    when searching, try hash, if not working, strip all before dot and hash, repeat.
+    when star is at the end, also just dump it ig, nginx did something like moving the end to the start but idk.
+    you have to append an empty char to the end that cannot be extended!
+    */
+    if method.as_str() == "LIST" {
+        return "Here is so many items oh my god";
+    }
+    return "Nope, nothing here!";
 }
 
 #[tokio::main]
@@ -159,6 +204,7 @@ async fn main() {
 
 #[derive(Default, Clone, Debug, FromRef)]
 struct MyState {
+    path_database: Arc<Mutex<HashMap<String, HashSet<String>>>>,
     connections: Arc<Mutex<HashMap<String, StreamCon>>>,
 }
 
