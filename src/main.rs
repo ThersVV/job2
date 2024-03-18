@@ -138,6 +138,8 @@ async fn accept_stream(
     payload: Bytes,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     //check for empty put request!
+    //path must not end with '/'
+    let path = "/".to_owned() + &path;
     if id_is_completed(&state, &path).await {
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&path);
@@ -208,22 +210,27 @@ async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl
 
 async fn list_files(
     method: Method,
-    headers: HeaderMap,
+    //headers: HeaderMap,
     State(state): AppState,
     body: String,
 ) -> impl IntoResponse {
-    /*
-    TODO:
-    Check if this alg is ok:
-    just strip the star away from start and hash it
-    when searching, try hash, if not working, strip all before dot and hash, repeat.
-    when star is at the end, also just dump it ig, nginx did something like moving the end to the start but idk.
-    you have to append an empty char to the end that cannot be extended!
-    */
+    // devide into prefix and exact
     if method.as_str() == "LIST" {
-        return "Here is so many items oh my god";
+        let path_database = state.path_database.lock().await;
+        let mut result = String::new();
+        let query = body[..body.len() - 1].to_string();
+        if let Some(files) = path_database.get(&query) {
+            let mut iterator = files.iter().peekable();
+            while let Some(file) = iterator.next() {
+                result = result + &query + file;
+                if iterator.peek().is_some() {
+                    result += "\n";
+                }
+            }
+        }
+        return result.to_owned();
     }
-    return "Nope, nothing here!";
+    return "Nope, nothing here!".to_owned();
 }
 
 #[tokio::main]
