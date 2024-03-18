@@ -32,6 +32,7 @@ async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl
     let valid_id = stream_map.contains_key(&path);
     if valid_id {
         stream_map.remove(&path);
+        delete_path_from_db(&state, &path).await;
         return Ok((StatusCode::NO_CONTENT, "File succesfully deleted!"));
     } else {
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
@@ -60,6 +61,45 @@ async fn manage_readers(stream: &StreamCon) {
         reader.clone().wake();
     }
     readers.clear();
+}
+
+async fn delete_path_from_db(state: &MyState, path: &str) {
+    // consider function that returns key-value pairs
+    let mut path_database = state.path_database.lock().await;
+    let mut key_buffer = "".to_string();
+    let exploded_path = path.split('/');
+    let mut key_iterator = exploded_path.clone().enumerate().peekable();
+
+    while let Some((i, key_word)) = key_iterator.next() {
+        key_buffer = key_buffer + key_word;
+        if key_iterator.peek().is_some() {
+            key_buffer = key_buffer + "/";
+            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
+
+            let mut value_buffer = "".to_string();
+            let mut value_iterator = exploded_path.clone().skip(i + 1).peekable();
+            while let Some(value_word) = value_iterator.next() {
+                value_buffer = value_buffer + value_word;
+                if value_iterator.peek().is_some() {
+                    value_buffer = value_buffer + "/";
+                }
+            }
+
+            if key_entry.len() < 2 {
+                path_database.remove(&key_buffer);
+            } else {
+                key_entry.remove(&value_buffer);
+            }
+        } else {
+            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
+            if key_entry.len() < 2 {
+                path_database.remove(&key_buffer);
+            } else {
+                key_entry.remove("");
+            }
+        }
+    }
+    println!("{:?}", path_database);
 }
 
 async fn add_path_into_db(state: &MyState, path: &str) {
@@ -97,6 +137,7 @@ async fn accept_stream(
     headers: HeaderMap,
     payload: Bytes,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
+    //check for empty put request!
     if id_is_completed(&state, &path).await {
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&path);
@@ -127,9 +168,10 @@ async fn accept_stream(
                 buffer.clear();
 
                 let chunked_transfer_end = chunked_encoding && payload.len() == 0;
-                let nonchunked_req_end = !chunked_encoding && (i + 1) * BYTES_PER_CHUNK >= iters;
+                let nonchunked_request_end =
+                    !chunked_encoding && (i + 1) * BYTES_PER_CHUNK >= iters;
 
-                if chunked_transfer_end || nonchunked_req_end {
+                if chunked_transfer_end || nonchunked_request_end {
                     writer.ended = true;
                 }
 
