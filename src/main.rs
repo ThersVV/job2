@@ -135,8 +135,18 @@ async fn accept_stream(
     headers: HeaderMap,
     payload: Bytes,
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
-    //check for empty put request!
-    //path must not end with '/'
+    //this should be in its own function, but for now its here :----)
+    if payload.len() == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "You requested so save emptiness, you silly!".to_owned(),
+        ));
+    } else if path.chars().last().is_some_and(|c| c == '/') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Destination path cannot end with '/'!".to_owned(),
+        ));
+    }
     let path = "/".to_owned() + &path;
     if id_is_completed(&state, &path).await {
         let mut stream_map = state.connections.lock().await;
@@ -154,8 +164,7 @@ async fn accept_stream(
             std::cmp::min((i + 1) * BYTES_PER_CHUNK, payload.len()),
         );
 
-        //measure time, maybe Bytes is smart enough to not copy to writer and just reference it (should be)
-        buffer.push(Bytes::copy_from_slice(&payload[payload_start..payload_end]));
+        buffer.push(payload.slice(payload_start..payload_end));
 
         let end_of_request = (i + 1) * BYTES_PER_CHUNK >= iters;
         if buffer.len() > WRITE_BUFFER_CAPACITY || end_of_request {
@@ -191,7 +200,6 @@ async fn accept_stream(
 
 async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let stream_map = state.connections.lock().await;
-    //implement chunked response
     if let Some(stream) = stream_map.get(&path) {
         let cache_stream = CacheStream {
             cache: stream.writer.clone(),
@@ -200,7 +208,7 @@ async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl
         };
         let body = Body::from_stream(cache_stream);
 
-        return Ok((StatusCode::ACCEPTED, body));
+        return Ok((StatusCode::ACCEPTED, [(TRANSFER_ENCODING, "chunked")], body));
     } else {
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
