@@ -99,7 +99,6 @@ async fn delete_path_from_db(state: &MyState, path: &str) {
             }
         }
     }
-    println!("{:?}", path_database);
 }
 
 async fn add_path_into_db(state: &MyState, path: &str) {
@@ -128,7 +127,6 @@ async fn add_path_into_db(state: &MyState, path: &str) {
             key_entry.insert("".to_string());
         }
     }
-    println!("{:?}", path_database);
 }
 
 async fn accept_stream(
@@ -193,7 +191,7 @@ async fn accept_stream(
 
 async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let stream_map = state.connections.lock().await;
-
+    //implement chunked response
     if let Some(stream) = stream_map.get(&path) {
         let cache_stream = CacheStream {
             cache: stream.writer.clone(),
@@ -208,29 +206,41 @@ async fn return_stream(State(state): AppState, Path(path): Path<String>) -> impl
     }
 }
 
-async fn list_files(
-    method: Method,
-    //headers: HeaderMap,
-    State(state): AppState,
-    body: String,
-) -> impl IntoResponse {
-    // devide into prefix and exact
+async fn correct_list_query(body: String) -> Result<String, &'static str> {
+    if let Some(first_char) = body.chars().next() {
+        if first_char != '/' {
+            return Err("Incorrect path (must start with '/')!!!");
+        }
+    } else {
+        return Err("Incorrect path (empty)!!!");
+    }
+    if !body.ends_with("/*") {
+        return Err("Incorrect path (must end with /*)!!!");
+    }
+    return Ok(body[..body.len() - 1].to_string());
+}
+
+async fn list_files(method: Method, State(state): AppState, body: String) -> impl IntoResponse {
     if method.as_str() == "LIST" {
-        let path_database = state.path_database.lock().await;
-        let mut result = String::new();
-        let query = body[..body.len() - 1].to_string();
-        if let Some(files) = path_database.get(&query) {
-            let mut iterator = files.iter().peekable();
-            while let Some(file) = iterator.next() {
-                result = result + &query + file;
-                if iterator.peek().is_some() {
-                    result += "\n";
+        match correct_list_query(body).await {
+            Err(e) => return e.to_owned(),
+            Ok(query) => {
+                let path_database = state.path_database.lock().await;
+                let mut result = String::new();
+                if let Some(files) = path_database.get(&query) {
+                    let mut iterator = files.iter().peekable();
+                    while let Some(file) = iterator.next() {
+                        result = result + &query + file;
+                        if iterator.peek().is_some() {
+                            result += "\n";
+                        }
+                    }
                 }
+                return result.to_owned();
             }
         }
-        return result.to_owned();
     }
-    return "Nope, nothing here!".to_owned();
+    return "Unknown method!".to_owned();
 }
 
 #[tokio::main]
