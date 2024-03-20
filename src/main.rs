@@ -23,10 +23,6 @@ type AppState = State<MyState>;
 const BYTES_PER_CHUNK: usize = 8;
 const WRITE_BUFFER_CAPACITY: usize = 100; //in bytes
 
-async fn hello_world<'a>() -> &'a str {
-    return "hi!";
-}
-
 async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let mut stream_map = state.connections.lock().await;
     let valid_id = stream_map.contains_key(&path);
@@ -257,7 +253,6 @@ async fn main() {
     let state = MyState::default();
 
     let app = Router::new()
-        .route("/", get(hello_world))
         .route("/*path", put(accept_stream))
         .route("/*path", delete(delete_stream))
         .route("/*path", get(return_stream))
