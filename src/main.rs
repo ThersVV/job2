@@ -59,69 +59,51 @@ async fn manage_readers(stream: &StreamCon) {
     readers.clear();
 }
 
-async fn delete_path_from_db(state: &MyState, path: &str) {
-    // consider function that returns key-value pairs
-    let mut path_database = state.path_database.lock().await;
+async fn get_path_splits(path: &str) -> Vec<(String, String)> {
+    let prepended_path = "/".to_owned() + &path;
+    let exploded_path = prepended_path.split('/');
+    let mut result = Vec::new();
+
     let mut key_buffer = "".to_string();
-    let exploded_path = path.split('/');
     let mut key_iterator = exploded_path.clone().enumerate().peekable();
-
     while let Some((i, key_word)) = key_iterator.next() {
-        key_buffer = key_buffer + key_word;
+        key_buffer += key_word;
         if key_iterator.peek().is_some() {
-            key_buffer = key_buffer + "/";
-            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
+            key_buffer += "/";
+        }
 
-            let mut value_buffer = "".to_string();
-            let mut value_iterator = exploded_path.clone().skip(i + 1).peekable();
-            while let Some(value_word) = value_iterator.next() {
-                value_buffer = value_buffer + value_word;
-                if value_iterator.peek().is_some() {
-                    value_buffer = value_buffer + "/";
-                }
+        let mut value_buffer = "".to_string();
+        let mut value_iterator = exploded_path.clone().skip(i + 1).peekable();
+        while let Some(value_word) = value_iterator.next() {
+            value_buffer += value_word;
+            if value_iterator.peek().is_some() {
+                value_buffer += "/";
             }
+        }
+        result.push((key_buffer.clone(), value_buffer.clone()));
+    }
+    return result;
+}
 
-            if key_entry.len() < 2 {
-                path_database.remove(&key_buffer);
-            } else {
-                key_entry.remove(&value_buffer);
-            }
+async fn delete_path_from_db(state: &MyState, path: &str) {
+    let mut path_database = state.path_database.lock().await;
+    let paths = get_path_splits(path).await;
+    for (key, value) in paths.into_iter() {
+        let key_entry = path_database.entry(key.clone()).or_default();
+        if key_entry.len() < 2 {
+            path_database.remove(&key);
         } else {
-            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
-            if key_entry.len() < 2 {
-                path_database.remove(&key_buffer);
-            } else {
-                key_entry.remove("");
-            }
+            key_entry.remove(&value);
         }
     }
 }
 
 async fn add_path_into_db(state: &MyState, path: &str) {
     let mut path_database = state.path_database.lock().await;
-    let mut key_buffer = "".to_string();
-    let exploded_path = path.split('/');
-    let mut key_iterator = exploded_path.clone().enumerate().peekable();
-
-    while let Some((i, key_word)) = key_iterator.next() {
-        key_buffer = key_buffer + key_word;
-        if key_iterator.peek().is_some() {
-            key_buffer = key_buffer + "/";
-            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
-
-            let mut value_buffer = "".to_string();
-            let mut value_iterator = exploded_path.clone().skip(i + 1).peekable();
-            while let Some(value_word) = value_iterator.next() {
-                value_buffer = value_buffer + value_word;
-                if value_iterator.peek().is_some() {
-                    value_buffer = value_buffer + "/";
-                }
-            }
-            key_entry.insert(value_buffer.to_string());
-        } else {
-            let key_entry = path_database.entry(key_buffer.to_string()).or_default();
-            key_entry.insert("".to_string());
-        }
+    let paths = get_path_splits(path).await;
+    for (key, value) in paths.into_iter() {
+        let key_entry = path_database.entry(key).or_default();
+        key_entry.insert(value);
     }
 }
 
@@ -137,13 +119,18 @@ async fn accept_stream(
             StatusCode::BAD_REQUEST,
             "You requested so save emptiness, you silly!".to_owned(),
         ));
-    } else if path.chars().last().is_some_and(|c| c == '/') {
+    } else if !path.chars().last().is_some_and(|c| c != '/') {
         return Err((
             StatusCode::BAD_REQUEST,
             "Destination path cannot end with '/'!".to_owned(),
         ));
+    } else if path.contains("//") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Destination path cannot contain '//'!".to_owned(),
+        ));
     }
-    let path = "/".to_owned() + &path;
+
     if id_is_completed(&state, &path).await {
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&path);
@@ -230,7 +217,7 @@ async fn list_files(method: Method, State(state): AppState, body: String) -> imp
             Err(e) => return e.to_owned(),
             Ok(query) => {
                 let path_database = state.path_database.lock().await;
-                let mut result = String::new();
+                let mut result = "".to_owned();
                 if let Some(files) = path_database.get(&query) {
                     let mut iterator = files.iter().peekable();
                     while let Some(file) = iterator.next() {
