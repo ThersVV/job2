@@ -106,14 +106,7 @@ async fn add_path_into_db(state: &MyState, path: &str) {
         key_entry.insert(value);
     }
 }
-
-async fn accept_stream(
-    State(state): AppState,
-    Path(path): Path<String>,
-    headers: HeaderMap,
-    payload: Bytes,
-) -> Result<(StatusCode, String), (StatusCode, String)> {
-    //this should be in its own function, but for now its here :----)
+async fn stream_check(path: &String, payload: &Bytes) -> Result<(), (StatusCode, String)> {
     if payload.len() == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -129,6 +122,18 @@ async fn accept_stream(
             StatusCode::BAD_REQUEST,
             "Destination path cannot contain '//'!".to_owned(),
         ));
+    } else {
+        return Ok(());
+    }
+}
+async fn accept_stream(
+    State(state): AppState,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    payload: Bytes,
+) -> Result<(StatusCode, String), (StatusCode, String)> {
+    if let Err(e) = stream_check(&path, &payload).await {
+        return Err(e);
     }
 
     if id_is_completed(&state, &path).await {
