@@ -106,8 +106,14 @@ async fn add_path_into_db(state: &MyState, path: &str) {
         key_entry.insert(value);
     }
 }
-async fn stream_check(path: &String, payload: &Bytes) -> Result<(), (StatusCode, String)> {
-    if payload.len() == 0 {
+async fn stream_check(
+    path: &String,
+    payload: &Bytes,
+    headers: &HeaderMap,
+) -> Result<(), (StatusCode, String)> {
+    let chunked_encoding =
+        headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
+    if payload.len() == 0 && !chunked_encoding {
         return Err((
             StatusCode::BAD_REQUEST,
             "You requested so save emptiness, you silly!".to_owned(),
@@ -132,7 +138,7 @@ async fn accept_stream(
     headers: HeaderMap,
     payload: Bytes,
 ) -> impl IntoResponse {
-    if let Err(e) = stream_check(&path, &payload).await {
+    if let Err(e) = stream_check(&path, &payload, &headers).await {
         return Err(e);
     }
 
@@ -140,7 +146,6 @@ async fn accept_stream(
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&path);
     }
-
     let created = !id_exists(&state, &path).await;
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
@@ -155,7 +160,7 @@ async fn accept_stream(
 
         buffer.push(payload.slice(payload_start..payload_end));
 
-        let end_of_request = (i + 1) * BYTES_PER_CHUNK >= iters;
+        let end_of_request = (i + 1) > iters;
         if buffer.len() > WRITE_BUFFER_CAPACITY || end_of_request {
             {
                 let mut stream_map = state.connections.lock().await;
@@ -179,11 +184,11 @@ async fn accept_stream(
     }
     if created {
         add_path_into_db(&state, &path).await;
-        return Ok((StatusCode::CREATED, "Resource has been created!".to_owned()));
+        return Ok(StatusCode::CREATED);
     } else if chunked_encoding {
-        return Ok((StatusCode::NO_CONTENT, "Chunk finished!".to_owned()));
+        return Ok(StatusCode::NO_CONTENT);
     } else {
-        return Ok((StatusCode::NO_CONTENT, "Transfer finished!".to_owned()));
+        return Ok(StatusCode::NO_CONTENT);
     }
 }
 
