@@ -86,9 +86,9 @@ async fn get_path_splits(path: &str) -> Vec<(String, String)> {
 }
 
 async fn delete_path_from_db(state: &MyState, path: &str) {
-    let mut path_database = state.path_database.lock().await;
     let paths = get_path_splits(path).await;
     for (key, value) in paths.into_iter() {
+        let mut path_database = state.path_database.lock().await;
         let key_entry = path_database.entry(key.clone()).or_default();
         if key_entry.len() < 2 {
             path_database.remove(&key);
@@ -119,7 +119,7 @@ async fn accept_stream(
             StatusCode::BAD_REQUEST,
             "You requested so save emptiness, you silly!".to_owned(),
         ));
-    } else if !path.chars().last().is_some_and(|c| c != '/') {
+    } else if path.ends_with('/') {
         return Err((
             StatusCode::BAD_REQUEST,
             "Destination path cannot end with '/'!".to_owned(),
@@ -135,6 +135,7 @@ async fn accept_stream(
         let mut stream_map = state.connections.lock().await;
         stream_map.remove(&path);
     }
+
     let created = !id_exists(&state, &path).await;
     let chunked_encoding =
         headers.contains_key(TRANSFER_ENCODING) && headers[TRANSFER_ENCODING] == "chunked";
