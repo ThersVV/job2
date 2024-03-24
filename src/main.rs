@@ -131,7 +131,7 @@ async fn accept_stream(
     Path(path): Path<String>,
     headers: HeaderMap,
     payload: Bytes,
-) -> Result<(StatusCode, String), (StatusCode, String)> {
+) -> impl IntoResponse {
     if let Err(e) = stream_check(&path, &payload).await {
         return Err(e);
     }
