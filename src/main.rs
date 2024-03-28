@@ -7,7 +7,7 @@ use axum::{
             CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_LOCATION, CONTENT_RANGE,
             CONTENT_TYPE, TRANSFER_ENCODING,
         },
-        HeaderMap, Method, StatusCode,
+        HeaderMap, HeaderName, Method, StatusCode,
     },
     response::IntoResponse,
     routing::{delete, get, put},
@@ -27,6 +27,14 @@ type AppState = State<MyState>;
 // BYTES_PER_CHUNK must always be smaller than WRITE_BUFFER_CAPACITY!
 const BYTES_PER_CHUNK: usize = 8;
 const WRITE_BUFFER_CAPACITY: usize = 100; //in bytes
+const CONTENT_HEADERS: [HeaderName; 6] = [
+    CONTENT_ENCODING,
+    CONTENT_LANGUAGE,
+    CONTENT_LENGTH,
+    CONTENT_LOCATION,
+    CONTENT_RANGE,
+    CONTENT_TYPE,
+];
 
 async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl IntoResponse {
     let mut stream_map = state.connections.lock().await;
@@ -111,16 +119,8 @@ async fn add_path_into_db(state: &MyState, path: &str) {
         key_entry.insert(value);
     }
 }
-async fn content_headers(headers: &HeaderMap) -> bool {
-    let keys = [
-        CONTENT_ENCODING,
-        CONTENT_LANGUAGE,
-        CONTENT_LENGTH,
-        CONTENT_LOCATION,
-        CONTENT_RANGE,
-        CONTENT_TYPE,
-    ];
-    for key in keys.iter() {
+async fn contains_content_headers(headers: &HeaderMap) -> bool {
+    for key in CONTENT_HEADERS.iter() {
         if headers.contains_key(key) {
             return true;
         }
@@ -149,7 +149,7 @@ async fn stream_check(
             StatusCode::BAD_REQUEST,
             "Destination path cannot contain '//'!".to_owned(),
         ));
-    } else if content_headers(headers).await {
+    } else if contains_content_headers(headers).await {
         //RFC PUT behaviour
         return Err((
             StatusCode::NOT_IMPLEMENTED,
