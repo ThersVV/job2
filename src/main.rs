@@ -2,7 +2,13 @@ use axum::{
     body::{Body, Bytes},
     extract::{FromRef, Path, State},
     handler::Handler,
-    http::{header::TRANSFER_ENCODING, HeaderMap, Method, StatusCode},
+    http::{
+        header::{
+            CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_LOCATION, CONTENT_RANGE,
+            CONTENT_TYPE, TRANSFER_ENCODING,
+        },
+        HeaderMap, Method, StatusCode,
+    },
     response::IntoResponse,
     routing::{delete, get, put},
     Error, Router,
@@ -105,6 +111,22 @@ async fn add_path_into_db(state: &MyState, path: &str) {
         key_entry.insert(value);
     }
 }
+async fn content_headers(headers: &HeaderMap) -> bool {
+    let keys = [
+        CONTENT_ENCODING,
+        CONTENT_LANGUAGE,
+        CONTENT_LENGTH,
+        CONTENT_LOCATION,
+        CONTENT_RANGE,
+        CONTENT_TYPE,
+    ];
+    for key in keys.iter() {
+        if headers.contains_key(key) {
+            return true;
+        }
+    }
+    return false;
+}
 async fn stream_check(
     path: &String,
     payload: &Bytes,
@@ -125,6 +147,12 @@ async fn stream_check(
     } else if path.contains("//") {
         return Err((
             StatusCode::BAD_REQUEST,
+            "Destination path cannot contain '//'!".to_owned(),
+        ));
+    } else if content_headers(headers).await {
+        //RFC PUT behaviour
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
             "Destination path cannot contain '//'!".to_owned(),
         ));
     } else {
