@@ -277,6 +277,9 @@ async fn list_files(method: Method, State(state): AppState, body: String) -> imp
             }
         }
     }
+    if method.as_str() == "PUT" || method.as_str() == "GET" || method.as_str() == "DELETE" {
+        return "/list path is reserved for LIST method!".to_owned();
+    }
     return "Unknown method!".to_owned();
 }
 
