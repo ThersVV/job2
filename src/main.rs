@@ -120,12 +120,20 @@ async fn add_path_into_db(state: &MyState, path: &str) {
     }
 }
 async fn contains_content_headers(headers: &HeaderMap) -> bool {
-    for key in CONTENT_HEADERS.iter() {
+    return false;
+    /*
+    RFC is weird here. I should just return 501 if I do not use Content-* headers and I'm aware of that.
+    But using headers like Content-Length only complicates code, considering I can just use body.len, both
+    O(1). Or Content-Type, which I do not care about atm. These two headers are included with curl
+    by default, so for the sake of testing and code clarity the code below is turned off. If RFC correctness
+    is required, uncomment it and delete above "return false;"
+    */
+    /*     for key in CONTENT_HEADERS.iter() {
         if headers.contains_key(key) {
             return true;
         }
     }
-    return false;
+    return false; */
 }
 async fn stream_check(
     path: &String,
@@ -150,10 +158,10 @@ async fn stream_check(
             "Destination path cannot contain '//'!".to_owned(),
         ));
     } else if contains_content_headers(headers).await {
-        //RFC commanded PUT behaviour
+        //RFC commanded PUT behaviour, currently off
         return Err((
             StatusCode::NOT_IMPLEMENTED,
-            "Destination path cannot contain '//'!".to_owned(),
+            "Unimplemented Content-* header was used!".to_owned(),
         ));
     } else {
         return Ok(());
