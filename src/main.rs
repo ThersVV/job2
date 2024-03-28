@@ -150,7 +150,7 @@ async fn stream_check(
             "Destination path cannot contain '//'!".to_owned(),
         ));
     } else if contains_content_headers(headers).await {
-        //RFC PUT behaviour
+        //RFC commanded PUT behaviour
         return Err((
             StatusCode::NOT_IMPLEMENTED,
             "Destination path cannot contain '//'!".to_owned(),
