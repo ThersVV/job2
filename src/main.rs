@@ -1,6 +1,5 @@
 use axum::{
     body::{Body, Bytes},
-    debug_handler,
     extract::{FromRef, Path, State},
     handler::Handler,
     http::{header::TRANSFER_ENCODING, HeaderMap, Method, StatusCode},
@@ -29,7 +28,7 @@ async fn delete_stream(State(state): AppState, Path(path): Path<String>) -> impl
     if valid_id {
         stream_map.remove(&path);
         delete_path_from_db(&state, &path).await;
-        return Ok((StatusCode::NO_CONTENT, "File succesfully deleted!"));
+        return Ok(StatusCode::NO_CONTENT);
     } else {
         return Err((StatusCode::NOT_FOUND, "Requested stream ID was not found!"));
     }
